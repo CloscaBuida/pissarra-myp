@@ -61,8 +61,8 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
     redraw: null
   });
 
-  // triggerUpdate per forçar el redibuix i enviar la difusió
-  const triggerUpdate = () => {
+  // --- triggerUpdate ara accepta un paràmetre per controlar si ha d'emetre ---
+  const triggerUpdate = (emitir = true) => {
     const eng = engineRef.current;
     if (!eng.redraw) return;
     eng.redraw();
@@ -75,7 +75,10 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
         eng.redraw();
       });
     });
-    if (window.broadcastCanvasUpdate) window.broadcastCanvasUpdate();
+    // Només emetem si és una acció local (no una recepció remota)
+    if (emitir && window.broadcastCanvasUpdate) {
+      window.broadcastCanvasUpdate();
+    }
   };
 
   // En sortir del mode "seleccionar", esborrem la selecció visible.
@@ -90,7 +93,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
   const uiRef = useRef({ mode, color, brush, thick });
   useEffect(() => { uiRef.current = { mode, color, brush, thick }; }, [mode, color, brush, thick]);
 
-  // --- useEffect per clearTrigger ---
+  // --- clearTrigger: esborra tota la pissarra i emet (acció local) ---
   useEffect(() => {
     if (clearTrigger > 0) {
       engineRef.current.strokes = [];
@@ -98,6 +101,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       engineRef.current.panY = 0;
       engineRef.current.scale = 1;
       setZoomLabel('100%');
+      // Això ja emetrà perquè triggerUpdate per defecte ho fa
       triggerUpdate();
     }
   }, [clearTrigger]);
@@ -604,10 +608,8 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       eng.strokes.push(eng.currentStroke);
       eng.currentStroke = null; eng.lastPx = null;
 
-      // ---------- ENVIAR DADES QUAN S'ACABA EL TRAÇ ----------
-      if (window.broadcastCanvasUpdate) {
-        window.broadcastCanvasUpdate();
-      }
+      // --- Acció local: emetem l'estat (triggerUpdate ja ho farà) ---
+      triggerUpdate();
     };
 
     const handleWheel = (e) => {
@@ -955,7 +957,8 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
         getCanvasState={() => engineRef.current.strokes} 
         setCanvasState={(newStrokes) => {
           engineRef.current.strokes = newStrokes;
-          triggerUpdate();
+          // IMPORTANT: no re-emetre! passem false per evitar el bucle
+          triggerUpdate(false);
         }} 
       />
     </div>
