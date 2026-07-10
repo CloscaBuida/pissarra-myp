@@ -61,7 +61,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
     redraw: null
   });
 
-  // --- triggerUpdate ara accepta un paràmetre per controlar si ha d'emetre ---
+  // triggerUpdate amb control d'emissió
   const triggerUpdate = (emitir = true) => {
     const eng = engineRef.current;
     if (!eng.redraw) return;
@@ -75,7 +75,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
         eng.redraw();
       });
     });
-    // Només emetem si és una acció local (no una recepció remota)
+    // Només emetre si és una acció LOCAL (no una recepció remota)
     if (emitir && window.broadcastCanvasUpdate) {
       window.broadcastCanvasUpdate();
     }
@@ -93,7 +93,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
   const uiRef = useRef({ mode, color, brush, thick });
   useEffect(() => { uiRef.current = { mode, color, brush, thick }; }, [mode, color, brush, thick]);
 
-  // --- clearTrigger: esborra tota la pissarra i emet (acció local) ---
+  // clearTrigger: esborra tota la pissarra i emet (acció local)
   useEffect(() => {
     if (clearTrigger > 0) {
       engineRef.current.strokes = [];
@@ -101,8 +101,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       engineRef.current.panY = 0;
       engineRef.current.scale = 1;
       setZoomLabel('100%');
-      // Això ja emetrà perquè triggerUpdate per defecte ho fa
-      triggerUpdate();
+      triggerUpdate(); // emet perquè per defecte és true
     }
   }, [clearTrigger]);
 
@@ -118,6 +117,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
     return () => document.removeEventListener('pointerdown', handleClickOutside);
   }, [mathMenuOpen]);
 
+  // ---------- CONFIGURACIÓ DEL CANVAS ----------
   useEffect(() => {
     const canvas = canvasRef.current;
     const wrap = wrapRef.current;
@@ -608,8 +608,8 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       eng.strokes.push(eng.currentStroke);
       eng.currentStroke = null; eng.lastPx = null;
 
-      // --- Acció local: emetem l'estat (triggerUpdate ja ho farà) ---
-      triggerUpdate();
+      // ---------- NOMÉS AQUÍ S'EMET (acció LOCAL) ----------
+      triggerUpdate(); // per defecte emitir = true
     };
 
     const handleWheel = (e) => {
@@ -643,8 +643,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
     };
   }, []);
 
-  // --- EINES EXTERNES I BOTONS ---
-
+  // ---------- EINES EXTERNES I BOTONS ----------
   const applyMathTool = (val) => {
     setMathMenuOpen(false);
     if (!val) return;
@@ -687,7 +686,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       }
     }
 
-    triggerUpdate();
+    triggerUpdate(); // acció local → emet
   };
 
   const undo = () => {
@@ -704,13 +703,13 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
     if (engineRef.current.selectedGroupId === lastGroupId) {
       engineRef.current.selectedGroupId = null;
     }
-    triggerUpdate();
+    triggerUpdate(); // acció local → emet
   };
 
   const clearAll = () => {
     if(confirm('Esborrar tota la pissarra?')){
       engineRef.current.strokes = [];
-      triggerUpdate();
+      triggerUpdate(); // acció local → emet
     }
   };
 
@@ -745,13 +744,13 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       stroke.widthWorld = 200;
       stroke.heightWorld = 200 * aspect;
       stroke.img = img;
-      triggerUpdate();
+      triggerUpdate(); // acció local → emet
     };
 
-    triggerUpdate();
+    triggerUpdate(); // acció local → emet
   };
 
-  // ---------- FUNCIÓ DE DESCARREGA AMB FONS BLANC ----------
+  // ---------- DESCARREGAR PNG ----------
   const handleDownload = () => {
     const eng = engineRef.current;
     if (eng.strokes.length === 0) {
@@ -957,7 +956,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
         getCanvasState={() => engineRef.current.strokes} 
         setCanvasState={(newStrokes) => {
           engineRef.current.strokes = newStrokes;
-          // IMPORTANT: no re-emetre! passem false per evitar el bucle
+          // ----- IMPORTANT: NO RE-EMETRE! -----
           triggerUpdate(false);
         }} 
       />
