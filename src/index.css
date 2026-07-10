@@ -42,7 +42,6 @@ html, body {
   box-sizing: border-box;
 }
 
-/* body ja està definit amb les propietats de html, però afegim les específiques */
 body {
   background: var(--bg);
   font-family: 'Inter', system-ui, sans-serif;
@@ -69,6 +68,7 @@ button {
   background: var(--navy);
   padding: 26px 40px 78px;
   overflow: hidden;
+  flex-shrink: 0; /* <-- NOU: evita que la capçalera s'encongeixi */
 }
 
 .header-fields {
@@ -163,6 +163,7 @@ button {
   gap: 8px;
   padding: 14px 40px 0;
   flex-wrap: wrap;
+  flex-shrink: 0; /* <-- NOU: evita que la barra d'utilitats s'encongeixi */
 }
 
 .util-btn {
@@ -215,6 +216,8 @@ button {
   align-items: stretch;
   padding: 16px 40px 0;
   flex: 1;
+  min-height: 0;      /* <-- NOU: permet que el flex calculi l'alçada sobrant */
+  overflow: hidden;   /* <-- NOU: evita que el contingut desbordi */
 }
 
 .board-wrap {

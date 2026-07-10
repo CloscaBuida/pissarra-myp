@@ -29,7 +29,7 @@ export default function RoomManager({ getCanvasState, setCanvasState }) {
       connRef.current = conn;
       setStatus('Professor connectat!');
       
-      // SOLUCIÓ APLICADA: Enviem les dades amb un petit retard en lloc 
+      // Enviem les dades amb un petit retard en lloc 
       // d'esperar a un esdeveniment "open" que a GitHub Pages ja ha passat.
       setTimeout(() => {
         const currentState = getCanvasState();
@@ -87,7 +87,17 @@ export default function RoomManager({ getCanvasState, setCanvasState }) {
   }, [getCanvasState]);
 
   return (
-    <div style={{ position: 'absolute', top: 20, right: 20, background: 'white', padding: '15px', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', zIndex: 100 }}>
+    /* MODIFICACIÓ D'ESTIL: Posicionat a baix a la dreta per evitar conflictes a la PDI */
+    <div style={{ 
+      position: 'absolute', 
+      bottom: 30, 
+      right: 30, 
+      background: 'white', 
+      padding: '15px', 
+      borderRadius: '8px', 
+      boxShadow: '0 4px 12px rgba(0,0,0,0.1)', 
+      zIndex: 100 
+    }}>
       <h3 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#123B61' }}>🌐 Portal MYP</h3>
       
       {status === 'Desconnectat' && (
