@@ -118,7 +118,7 @@ function App() {
 
         {/* LOGO DE L'ESCOLA */}
         <img 
-          src="/logo-agora.png" 
+          src="./logo-agora.png" 
           alt="Logo Agora" 
           className="school-logo" 
         />

@@ -29,11 +29,14 @@ export default function RoomManager({ getCanvasState, setCanvasState }) {
       connRef.current = conn;
       setStatus('Professor connectat!');
       
-      conn.on('open', () => {
-        // Just en connectar-se, li enviem l'estat actual de la pissarra
+      // SOLUCIÓ APLICADA: Enviem les dades amb un petit retard en lloc 
+      // d'esperar a un esdeveniment "open" que a GitHub Pages ja ha passat.
+      setTimeout(() => {
         const currentState = getCanvasState();
-        conn.send({ type: 'sync', data: currentState });
-      });
+        if (currentState) {
+          conn.send({ type: 'sync', data: currentState });
+        }
+      }, 500);
 
       // Si el professor dibuixa des del seu ordinador, ho rebem aquí
       conn.on('data', (message) => {
