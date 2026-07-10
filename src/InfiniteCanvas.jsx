@@ -952,14 +952,15 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
         />
       )}
 
-      <RoomManager 
-        getCanvasState={() => engineRef.current.strokes} 
-        setCanvasState={(newStrokes) => {
-          engineRef.current.strokes = newStrokes;
-          // ----- IMPORTANT: NO RE-EMETRE! -----
-          triggerUpdate(false);
-        }} 
-      />
+      {props.showRoom && (
+  <RoomManager 
+    getCanvasState={() => engineRef.current.strokes} 
+    setCanvasState={(nousTracos) => {
+      engineRef.current.strokes = nousTracos;
+      triggerUpdate();
+    }} 
+  />
+)}
     </div>
   );
 });

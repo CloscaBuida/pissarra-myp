@@ -11,8 +11,9 @@ function App() {
   const [soi, setSoi] = useState('')
   const [conceptos, setConceptos] = useState('')
 
-  // 1. ESTAT DEL PONT (Trigger per avisar al canvas que s'ha de netejar)
+  // 1. ESTATS DELS TRIGGERS I VISIBILITAT
   const [clearCanvasTrigger, setClearCanvasTrigger] = useState(0)
+  const [showRoom, setShowRoom] = useState(false) // Controla si es mostra o s'amaga el Portal MYP
 
   // Referència per cridar mètodes del canvas
   const canvasRef = useRef(null)
@@ -26,28 +27,26 @@ function App() {
   // 2. FUNCIÓ "NOVA PISSARRA"
   const handleNewBoardClick = () => {
     if (window.confirm("Segur que vols començar una pissarra en blanc? Si no l'has descarregat, perdràs la feina actual.")) {
-      // Això suma 1, enviant un senyal a l'InfiniteCanvas perquè s'esborri
       setClearCanvasTrigger(prev => prev + 1)
     }
   }
 
-  // 3. FUNCIÓ "PANTALLA COMPLETA" (Versió Tot Terreny per a pantalles digitals)
+  // 3. FUNCIÓ "PANTALLA COMPLETA" (Corregida per entrar/sortir a la PDI)
   const toggleFullscreen = () => {
     const docEl = document.documentElement;
 
-    // Busquem la funció d'entrar segons el navegador
     const requestFS = docEl.requestFullscreen || 
                       docEl.webkitRequestFullscreen || 
                       docEl.mozRequestFullScreen || 
                       docEl.msRequestFullscreen;
 
-    // Busquem la funció de sortir segons el navegador
+    // A les PDI el mètode de sortida sol requerir CancelFullScreen en lloc de Exit
     const exitFS = document.exitFullscreen || 
                    document.webkitExitFullscreen || 
+                   document.webkitCancelFullScreen || 
                    document.mozCancelFullScreen || 
                    document.msExitFullscreen;
 
-    // Comprovem si ja estem en pantalla completa en algun dels formats
     const isFullscreen = document.fullscreenElement || 
                          document.webkitFullscreenElement || 
                          document.mozFullScreenElement || 
@@ -55,46 +54,55 @@ function App() {
 
     if (!isFullscreen) {
       if (requestFS) {
-        // Cridem la funció assegurant-nos que el context és el document
         requestFS.call(docEl).catch(err => {
-          console.error("Error de pantalla completa:", err);
-          alert("El navegador d'aquesta pantalla bloqueja la pantalla completa.");
+          console.error("Error al entrar en pantalla completa:", err);
         });
       }
     } else {
       if (exitFS) {
-        exitFS.call(document);
+        exitFS.call(document).catch(err => {
+          console.error("Error al sortir de pantalla completa:", err);
+        });
       }
     }
   }
 
   return (
     <div className="app">
-      <div className="utility-strip">
-        <span className="save-indicator">Desat ✓</span>
-        
-        {/* Botó connectat a la funció de neteja */}
-        <button className="util-btn" title="Començar una pissarra nova" onClick={handleNewBoardClick}>
-          Nova pissarra
-        </button>
-        
-        <button className="util-btn" title="Descarregar imatge" onClick={handleDownload}>
-          Descarregar
-        </button>
+      {/* LA BARRA UTILITY-STRIP S'HA ELIMINAT PER GUANYAR ESPAI */}
 
-        {/* Nou botó per a la Pantalla Completa */}
-        <button className="util-btn" title="Pantalla completa" onClick={toggleFullscreen}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="16" height="16" style={{ verticalAlign: 'middle', marginRight: '6px', marginBottom: '2px' }}>
-            <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
-          </svg>
-          Pantalla Completa
-        </button>
-      </div>
-
-      {/* Afegit position: relative per poder col·locar el logo absolutament respecte a la capçalera */}
       <header className="header" style={{ position: 'relative' }}>
+        
+        {/* NOVA FILA SUPERIOR INTERNA: Botons compactes dins del header blau */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', paddingBottom: '8px', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+          <span style={{ fontSize: '12px', color: '#a0aec0', fontWeight: '500' }}>Pissarra Interactiva MYP <span style={{ color: '#48bb78' }}>✓ Desat</span></span>
+          
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button 
+              className="util-btn" 
+              onClick={() => setShowRoom(!showRoom)} 
+              style={{ background: showRoom ? '#eb5a2e' : 'rgba(255,255,255,0.15)', borderColor: showRoom ? '#eb5a2e' : 'rgba(255,255,255,0.3)', fontWeight: 'bold' }}
+            >
+              🌐 {showRoom ? 'Amagar Portal' : 'Connectar Aula'}
+            </button>
+            <button className="util-btn" onClick={handleNewBoardClick}>
+              Nova pissarra
+            </button>
+            <button className="util-btn" onClick={handleDownload}>
+              Descarregar
+            </button>
+            <button className="util-btn" onClick={toggleFullscreen} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14">
+                <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+              </svg>
+              Pantalla Completa
+            </button>
+          </div>
+        </div>
+
+        {/* CAMPS DE TEXT MODULARS */}
         <div className="header-fields">
-          <div className="field-box" style={{ flex: '0 0 220px' }}>
+          <div className="field-box" style={{ flex: '0 0 200px' }}>
             <label>Subject:</label>
             <input 
               type="text" 
@@ -112,7 +120,7 @@ function App() {
               onChange={(e) => setUnit(e.target.value)} 
             />
           </div>
-          <div className="field-box" style={{ flex: '0 0 220px' }}>
+          <div className="field-box" style={{ flex: '0 0 180px' }}>
             <label>Session:</label>
             <input 
               type="text" 
@@ -159,7 +167,8 @@ function App() {
           subject={subject} 
           unit={unit} 
           session={session}
-          clearTrigger={clearCanvasTrigger} /* 4. PASSEM EL PONT AL CANVAS */
+          clearTrigger={clearCanvasTrigger}
+          showRoom={showRoom} /* 4. PASSEM EL PROP DE VISIBILITAT AL CANVAS */
         />
         <Sidebar />
       </div>
