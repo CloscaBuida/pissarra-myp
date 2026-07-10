@@ -2,6 +2,7 @@ import { useState, useRef } from 'react'
 import './index.css'
 import Sidebar from './Sidebar'
 import InfiniteCanvas from './InfiniteCanvas'
+import logoAgora from './assets/logo-agora.png';
 
 function App() {
   const [subject, setSubject] = useState('')
@@ -118,7 +119,7 @@ function App() {
 
         {/* LOGO DE L'ESCOLA */}
         <img 
-          src="./logo-agora.png" 
+          src={logoAgora} 
           alt="Logo Agora" 
           className="school-logo" 
         />

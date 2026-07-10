@@ -25,21 +25,20 @@ const rotatePointAround = (p, center, angle) => {
 
 // Mida i posició (en px de pantalla) de les nanses de rotar/escalar
 const HANDLE_SIZE = 15;
-const HANDLE_HIT_TOLERANCE = 10; // marge extra (px) per facilitar encertar la nansa
+const HANDLE_HIT_TOLERANCE = 10;
 const ROTATE_HANDLE_OFFSET = 34;
-const WHEEL_SCALE_STEP = 0.06; // % per "clic" de rodeta
-const WHEEL_ROTATE_STEP = Math.PI / 24; // 7.5° per "clic" de rodeta amb Shift
+const WHEEL_SCALE_STEP = 0.06;
+const WHEEL_ROTATE_STEP = Math.PI / 24;
 
-// Noms dels pinzells (només per a tooltips; als selectors ara només es veu la icona)
+// Noms dels pinzells
 const BRUSH_LABELS = {
   pencil: 'Llapis', marker: 'Retolador', highlighter: 'Fluorescent', spray: 'Esprai',
   neon: 'Neó', calligraphy: 'Cal·ligrafia', chalk: 'Guix', dotted: 'Punts',
 };
 
-// Paleta de colors reutilitzada pel toolbar principal i pel mini-toolbar de selecció
+// Paleta de colors
 const PALETTE_COLORS = ['#123B61', '#1B2733', '#EB5A2E', '#2E8B57', '#2B6CB0', '#8E44AD'];
 
-// --- AÑADIDA LA PROP clearTrigger ---
 const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref) => {
   const [mode, setMode] = useState('draw');
   const [color, setColor] = useState('#123B61');
@@ -48,7 +47,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
   const [zoomLabel, setZoomLabel] = useState('100%');
   const [mathMenuOpen, setMathMenuOpen] = useState(false);
   const [show3DPanel, setShow3DPanel] = useState(false);
-  const [selectionUI, setSelectionUI] = useState(null); // { x, y, color } del mini-toolbar flotant sobre l'objecte seleccionat
+  const [selectionUI, setSelectionUI] = useState(null);
   const mathMenuRef = useRef(null);
 
   const canvasRef = useRef(null);
@@ -62,7 +61,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
     redraw: null
   });
 
-  // --- MOVEM triggerUpdate AQUÍ PERQUÈ SIGUI ACCESSIBLE DES DELS useEffect ---
+  // triggerUpdate per forçar el redibuix i enviar la difusió
   const triggerUpdate = () => {
     const eng = engineRef.current;
     if (!eng.redraw) return;
@@ -91,14 +90,13 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
   const uiRef = useRef({ mode, color, brush, thick });
   useEffect(() => { uiRef.current = { mode, color, brush, thick }; }, [mode, color, brush, thick]);
 
-  // --- NUEVO useEffect para clearTrigger ---
+  // --- useEffect per clearTrigger ---
   useEffect(() => {
     if (clearTrigger > 0) {
       engineRef.current.strokes = [];
       engineRef.current.panX = 0;
       engineRef.current.panY = 0;
       engineRef.current.scale = 1;
-      // Si tens un estat per a la lletra del zoom, actualitza'l aquí:
       setZoomLabel('100%');
       triggerUpdate();
     }
@@ -232,7 +230,6 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       c.restore();
     };
 
-    // Mesura de text (mateixa heurística arreu per mantenir bbox i pintura consistents)
     const measureText = (s) => {
       const fontWorld = s.fontWorld || 16;
       const lines = (s.text || '').split('\n');
@@ -375,7 +372,6 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       return found ? { minX, minY, maxX, maxY } : null;
     };
 
-    // Nanses de rotar / escalar per a la selecció (coordenades de pantalla)
     const getHandleScreenPositions = (groupId) => {
       const b = getGroupBounds(groupId);
       if (!b) return null;
@@ -437,20 +433,17 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       eng.ctx.setLineDash([6, 4]);
       eng.ctx.strokeRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
 
-      // Tija de la nansa de rotació
       eng.ctx.setLineDash([]);
       eng.ctx.beginPath();
       eng.ctx.moveTo(rotate.x, topLeft.y);
       eng.ctx.lineTo(rotate.x, rotate.y);
       eng.ctx.stroke();
 
-      // Nansa de rotació (cercle)
       eng.ctx.fillStyle = '#fff';
       eng.ctx.beginPath();
       eng.ctx.arc(rotate.x, rotate.y, HANDLE_SIZE / 1.7, 0, Math.PI * 2);
       eng.ctx.fill(); eng.ctx.stroke();
 
-      // Nansa d'escalat (quadrat a la cantonada inferior dreta)
       eng.ctx.fillRect(scale.x - HANDLE_SIZE / 2, scale.y - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
       eng.ctx.strokeRect(scale.x - HANDLE_SIZE / 2, scale.y - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
       eng.ctx.restore();
@@ -486,7 +479,6 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       }
 
       if (mode === 'select') {
-        // Si ja hi ha una selecció activa, comprovem primer si s'ha premut una nansa
         if (eng.selectedGroupId) {
           const handles = getHandleScreenPositions(eng.selectedGroupId);
           if (handles) {
@@ -611,6 +603,11 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       if (!eng.currentStroke) return;
       eng.strokes.push(eng.currentStroke);
       eng.currentStroke = null; eng.lastPx = null;
+
+      // ---------- ENVIAR DADES QUAN S'ACABA EL TRAÇ ----------
+      if (window.broadcastCanvasUpdate) {
+        window.broadcastCanvasUpdate();
+      }
     };
 
     const handleWheel = (e) => {
@@ -721,7 +718,6 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
     const wrap = wrapRef.current;
     if (!eng || !wrap) return;
 
-    // Centre de la vista actual en coordenades món
     const viewCenterX = (wrap.clientWidth / 2 - eng.panX) / eng.scale;
     const viewCenterY = (wrap.clientHeight / 2 - eng.panY) / eng.scale;
 
@@ -733,8 +729,8 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       groupId: newGroupId(),
       x: viewCenterX,
       y: viewCenterY,
-      widthWorld: 200,   // amplada fixa al món (es pot ajustar)
-      heightWorld: 150,  // s'actualitzarà amb la relació d'aspecte real
+      widthWorld: 200,
+      heightWorld: 150,
       rot: 0,
       img: null,
       dataUrl,
@@ -750,7 +746,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       triggerUpdate();
     };
 
-    triggerUpdate(); // per mostrar un possible placeholder? (no, millor esperar)
+    triggerUpdate();
   };
 
   // ---------- FUNCIÓ DE DESCARREGA AMB FONS BLANC ----------
@@ -761,7 +757,6 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       return;
     }
 
-    // 1. Calcular límits de tots els traços (coordenades món)
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     eng.strokes.forEach(s => {
       if (s.type === 'text') {
@@ -790,11 +785,9 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
 
     if (!isFinite(minX)) return;
 
-    // 2. Marges per a l'etiqueta i vora blanca
     const margin = 40;
     const labelHeight = 40;
 
-    // 3. Crear canvas temporal a la mida exacta del contingut
     const offCanvas = document.createElement('canvas');
     const width = maxX - minX + 2 * margin;
     const height = maxY - minY + 2 * margin + labelHeight;
@@ -802,17 +795,14 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
     offCanvas.height = Math.ceil(height);
     const offCtx = offCanvas.getContext('2d');
 
-    // 4. Fons blanc
     offCtx.fillStyle = '#FCFDFE';
     offCtx.fillRect(0, 0, offCanvas.width, offCanvas.height);
 
-    // 5. Pintar l'etiqueta amb la informació de la sessió
     offCtx.fillStyle = '#6B7C93';
     offCtx.font = '16px Inter, sans-serif';
     const label = `${subject || 'Subject'} | ${unit || 'Unit'} | ${session || 'Session'}`;
     offCtx.fillText(label, margin, margin + 6);
 
-    // 6. Desplaçar el sistema de coordenades per pintar els traços
     const originalCtx = eng.ctx;
     const originalPanX = eng.panX;
     const originalPanY = eng.panY;
@@ -821,18 +811,15 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
     eng.ctx = offCtx;
     eng.panX = -minX + margin;
     eng.panY = -minY + margin + labelHeight;
-    eng.scale = 1; // exportar a escala 1:1
+    eng.scale = 1;
 
-    // Pintar els traços sense grid, sense selecció i SENSE NETEJAR EL CANVAS (clear=false)
     eng.redraw(false, false, false);
 
-    // 7. Restaurar l'estat original del motor
     eng.ctx = originalCtx;
     eng.panX = originalPanX;
     eng.panY = originalPanY;
     eng.scale = originalScale;
 
-    // 8. Descàrrega del fitxer
     const link = document.createElement('a');
     const subj = (subject || 'subject').trim().replace(/\s+/g, '_');
     const un = (unit || 'unit').trim().replace(/\s+/g, '_');
@@ -842,7 +829,6 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
     link.click();
   };
 
-  // Exposar la funció handleDownload al pare
   useImperativeHandle(ref, () => ({
     download: handleDownload
   }));
@@ -944,7 +930,6 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
         <button className="tool-btn" onClick={clearAll}>🗑️</button>
         <button className="tool-btn" onClick={handleDownload} title="Descarregar PNG">⬇️</button>
 
-        {/* Nou botó per obrir la biblioteca 3D */}
         <div className="divider"></div>
         <button
           className={`tool-btn ${show3DPanel ? 'active' : ''}`}
@@ -959,13 +944,13 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
         <span className="zoom-label">{zoomLabel}</span>
       </div>
 
-      {/* Panell flotant de sòlids 3D */}
       {show3DPanel && (
         <Solid3DPanel
           onClose={() => setShow3DPanel(false)}
           onInsertSnapshot={handleInsertSnapshot}
         />
       )}
+
       <RoomManager 
         getCanvasState={() => engineRef.current.strokes} 
         setCanvasState={(newStrokes) => {
@@ -1073,8 +1058,6 @@ const newFaceMaterial = () => new THREE.MeshStandardMaterial({
   color: FACE_COLOR, side: THREE.DoubleSide, roughness: 0.6, metalness: 0.05,
 });
 
-// Direcció (normalitzada) del centre del sòlid cap al centroide d'una cara,
-// usada per separar les cares en la vista "desplegada" (exploded view).
 const faceCentroidDirection = (pts) => {
   const c = pts.reduce((acc, p) => ({ x: acc.x + p.x / pts.length, y: acc.y + p.y / pts.length, z: acc.z + p.z / pts.length }), { x: 0, y: 0, z: 0 });
   const len = Math.hypot(c.x, c.y, c.z) || 1;
@@ -1089,7 +1072,6 @@ function buildSolidObject(def, params) {
     faces.forEach((pts) => {
       const faceGeom = makeFaceGeometry(pts);
       const mesh = new THREE.Mesh(faceGeom, newFaceMaterial());
-      // Contorn propi de cada cara (fill del mateix mesh, per tant es desplaça amb ell en explosionar)
       const outline = new THREE.LineSegments(
         new THREE.EdgesGeometry(faceGeom, 1),
         new THREE.LineBasicMaterial({ color: 0x1B2733 })
@@ -1109,7 +1091,6 @@ function buildSolidObject(def, params) {
   return group;
 }
 
-// Aplica la vista "desplegada": separa cada cara del centre segons `amount` (unitats de món)
 function setExplodeAmount(group, amount) {
   if (!group || !group.userData.explodable) return;
   group.children.forEach((child) => {
@@ -1137,7 +1118,7 @@ function defaultParams(def) {
 }
 
 const PALETTE_3D = ['#EB5A2E', '#2B6CB0', '#2E8B57', '#8E44AD', '#F2C14E', '#123B61', '#1B2733', '#FFFFFF'];
-const EXPLODE_MAX = 1.6; // factor màxim de separació (unitats de món) quan el slider està al 100%
+const EXPLODE_MAX = 1.6;
 
 const SOLIDS_3D = {
   cub: {
@@ -1150,12 +1131,12 @@ const SOLIDS_3D = {
         btl: { x: -h, y: h, z: -h }, btr: { x: h, y: h, z: -h }, bbr: { x: h, y: -h, z: -h }, bbl: { x: -h, y: -h, z: -h },
       };
       return [
-        [v.ftl, v.ftr, v.fbr, v.fbl], // davant
-        [v.btr, v.btl, v.bbl, v.bbr], // darrere
-        [v.ftr, v.btr, v.bbr, v.fbr], // dreta
-        [v.btl, v.ftl, v.fbl, v.bbl], // esquerra
-        [v.btl, v.btr, v.ftr, v.ftl], // dalt
-        [v.fbl, v.fbr, v.bbr, v.bbl], // baix
+        [v.ftl, v.ftr, v.fbr, v.fbl],
+        [v.btr, v.btl, v.bbl, v.bbr],
+        [v.ftr, v.btr, v.bbr, v.fbr],
+        [v.btl, v.ftl, v.fbl, v.bbl],
+        [v.btl, v.btr, v.ftr, v.ftl],
+        [v.fbl, v.fbr, v.bbr, v.bbl],
       ];
     },
     metrics: (p) => ({
@@ -1340,7 +1321,7 @@ function Solid3DPanel({ onClose, onInsertSnapshot }) {
   const [paintColor, setPaintColor] = useState('#EB5A2E');
   const [paintMode, setPaintMode] = useState(false);
   const [autoRotate, setAutoRotate] = useState(false);
-  const [explode, setExplode] = useState(0); // 0..1, vista "desplegada"
+  const [explode, setExplode] = useState(0);
   const [pos, setPos] = useState({ x: 70, y: 70 });
 
   const paintColorRef = useRef(paintColor);
@@ -1351,7 +1332,6 @@ function Solid3DPanel({ onClose, onInsertSnapshot }) {
 
   const solidDef = SOLIDS_3D[solidKey];
 
-  // Crea el motor Three.js un cop, mentre el panell estigui obert.
   useEffect(() => {
     const mount = mountRef.current;
     const t = threeRef.current;
@@ -1412,8 +1392,6 @@ function Solid3DPanel({ onClose, onInsertSnapshot }) {
 
   useEffect(() => { rebuildSolid(); }, [solidKey, params]);
 
-  // Reaplica el grau de "desplegat" cada cop que canvia el sòlid, els seus paràmetres, o el slider.
-  // S'executa després de rebuildSolid (declarat abans) perquè React processa els efectes en ordre.
   useEffect(() => {
     const t = threeRef.current;
     if (t.solid) setExplodeAmount(t.solid, explode * EXPLODE_MAX);
