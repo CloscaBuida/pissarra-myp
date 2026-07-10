@@ -31,15 +31,39 @@ function App() {
     }
   }
 
-  // 3. FUNCIÓ "PANTALLA COMPLETA"
+  // 3. FUNCIÓ "PANTALLA COMPLETA" (Versió Tot Terreny per a pantalles digitals)
   const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(err => {
-        console.error("El teu navegador no permet la pantalla completa: ", err);
-      });
+    const docEl = document.documentElement;
+
+    // Busquem la funció d'entrar segons el navegador
+    const requestFS = docEl.requestFullscreen || 
+                      docEl.webkitRequestFullscreen || 
+                      docEl.mozRequestFullScreen || 
+                      docEl.msRequestFullscreen;
+
+    // Busquem la funció de sortir segons el navegador
+    const exitFS = document.exitFullscreen || 
+                   document.webkitExitFullscreen || 
+                   document.mozCancelFullScreen || 
+                   document.msExitFullscreen;
+
+    // Comprovem si ja estem en pantalla completa en algun dels formats
+    const isFullscreen = document.fullscreenElement || 
+                         document.webkitFullscreenElement || 
+                         document.mozFullScreenElement || 
+                         document.msFullscreenElement;
+
+    if (!isFullscreen) {
+      if (requestFS) {
+        // Cridem la funció assegurant-nos que el context és el document
+        requestFS.call(docEl).catch(err => {
+          console.error("Error de pantalla completa:", err);
+          alert("El navegador d'aquesta pantalla bloqueja la pantalla completa.");
+        });
+      }
     } else {
-      if (document.exitFullscreen) {
-        document.exitFullscreen();
+      if (exitFS) {
+        exitFS.call(document);
       }
     }
   }
