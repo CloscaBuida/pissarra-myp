@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react';
 import * as THREE from 'three';
 import RoomManager from './RoomManager';
- 
+
 // Genera un identificador únic per agrupar traços
 let __groupSeq = 0;
 const newGroupId = () => `g${Date.now()}_${(__groupSeq++)}`;
- 
+
 // Distància d'un punt a un segment (hit-testing independent del zoom)
 const distToSegmentWorld = (p, a, b) => {
   const dx = b.x - a.x, dy = b.y - a.y;
@@ -15,31 +15,31 @@ const distToSegmentWorld = (p, a, b) => {
   t = Math.max(0, Math.min(1, t));
   return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
 };
- 
+
 // Rota un punt world al voltant d'un centre, un angle donat (radians)
 const rotatePointAround = (p, center, angle) => {
   const dx = p.x - center.x, dy = p.y - center.y;
   const cos = Math.cos(angle), sin = Math.sin(angle);
   return { x: center.x + dx * cos - dy * sin, y: center.y + dx * sin + dy * cos };
 };
- 
+
 // Mida i posició (en px de pantalla) de les nanses de rotar/escalar
-const HANDLE_SIZE = 15;
-const HANDLE_HIT_TOLERANCE = 10;
-const ROTATE_HANDLE_OFFSET = 34;
+const HANDLE_SIZE = 20; // Aumentado para mejor uso táctil
+const HANDLE_HIT_TOLERANCE = 15; // Tolerancia ampliada
+const ROTATE_HANDLE_OFFSET = 40;
 const WHEEL_SCALE_STEP = 0.06;
 const WHEEL_ROTATE_STEP = Math.PI / 24;
- 
+
 // Noms dels pinzells
 const BRUSH_LABELS = {
   pencil: 'Llapis', marker: 'Retolador', highlighter: 'Fluorescent', spray: 'Esprai',
   neon: 'Neó', calligraphy: 'Cal·ligrafia', chalk: 'Guix', dotted: 'Punts',
 };
- 
+
 // Paleta de colors
 const PALETTE_COLORS = ['#123B61', '#1B2733', '#EB5A2E', '#2E8B57', '#2B6CB0', '#8E44AD'];
- 
-const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref) => {
+
+const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showRoom }, ref) => {
   const [mode, setMode] = useState('draw');
   const [color, setColor] = useState('#123B61');
   const [brush, setBrush] = useState('pencil');
@@ -49,7 +49,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
   const [show3DPanel, setShow3DPanel] = useState(false);
   const [selectionUI, setSelectionUI] = useState(null);
   const mathMenuRef = useRef(null);
- 
+
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
   const engineRef = useRef({
@@ -58,9 +58,17 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
     lastPx: null, panStart: null, activeTextArea: null,
     selectedGroupId: null, dragStart: null,
     transformMode: null, transformCenter: null, transformLast: null,
-    redraw: null
+    redraw: null,
+    // Multitouch state
+    activePointers: new Map(),
+    pinchStartDist: 0,
+    pinchStartScale: 1,
+    pinchStartPanX: 0,
+    pinchStartPanY: 0,
+    pinchMidX: 0,
+    pinchMidY: 0,
   });
- 
+
   // triggerUpdate amb control d'emissió
   const triggerUpdate = (emitir = true) => {
     const eng = engineRef.current;
@@ -80,7 +88,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       window.broadcastCanvasUpdate();
     }
   };
- 
+
   // En sortir del mode "seleccionar", esborrem la selecció visible.
   useEffect(() => {
     if (mode !== 'select') {
@@ -89,10 +97,10 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       if (engineRef.current.redraw) engineRef.current.redraw();
     }
   }, [mode]);
- 
+
   const uiRef = useRef({ mode, color, brush, thick });
   useEffect(() => { uiRef.current = { mode, color, brush, thick }; }, [mode, color, brush, thick]);
- 
+
   // clearTrigger: esborra tota la pissarra i emet (acció local)
   useEffect(() => {
     if (clearTrigger > 0) {
@@ -104,7 +112,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       triggerUpdate(); // emet perquè per defecte és true
     }
   }, [clearTrigger]);
- 
+
   // Tanca el menú de "Mates" en clicar fora.
   useEffect(() => {
     if (!mathMenuOpen) return;
@@ -116,7 +124,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
     document.addEventListener('pointerdown', handleClickOutside);
     return () => document.removeEventListener('pointerdown', handleClickOutside);
   }, [mathMenuOpen]);
- 
+
   // ---------- CONFIGURACIÓ DEL CANVAS ----------
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -124,12 +132,12 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
     const eng = engineRef.current;
     const dpr = window.devicePixelRatio || 1;
     let lastW = 0, lastH = 0;
- 
+
     const setupCanvas = () => {
       const rect = wrap.getBoundingClientRect();
       if (Math.abs(rect.width - lastW) < 2 && Math.abs(rect.height - lastH) < 2) return;
       lastW = rect.width; lastH = rect.height;
- 
+
       canvas.width = Math.max(1, Math.round(rect.width * dpr));
       canvas.height = Math.max(1, Math.round(rect.height * dpr));
       canvas.style.width = rect.width + 'px';
@@ -138,10 +146,10 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       eng.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       if (eng.redraw) eng.redraw();
     };
- 
+
     const worldToScreen = (p) => ({ x: p.x * eng.scale + eng.panX, y: p.y * eng.scale + eng.panY });
     const screenToWorld = (p) => ({ x: (p.x - eng.panX) / eng.scale, y: (p.y - eng.panY) / eng.scale });
- 
+
     const drawGrid = (w, h) => {
       const spacing = 42 * eng.scale;
       if (spacing < 10) return;
@@ -156,7 +164,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       }
       eng.ctx.restore();
     };
- 
+
     const renderSprayDot = (c, x, y, baseW, color) => {
       c.save(); c.fillStyle = color;
       const count = 3;
@@ -169,7 +177,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       }
       c.restore();
     };
- 
+
     const renderSegment = (c, b, x1, y1, x2, y2, color, baseW) => {
       c.save();
       c.lineCap = 'round'; c.lineJoin = 'round';
@@ -221,7 +229,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       }
       c.restore();
     };
- 
+
     const renderDot = (c, b, x, y, color, baseW) => {
       if (b === 'spray') { renderSprayDot(c, x, y, baseW, color); renderSprayDot(c, x, y, baseW, color); return; }
       c.save();
@@ -233,7 +241,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       c.beginPath(); c.arc(x, y, Math.max(1, r), 0, Math.PI * 2); c.fill();
       c.restore();
     };
- 
+
     const measureText = (s) => {
       const fontWorld = s.fontWorld || 16;
       const lines = (s.text || '').split('\n');
@@ -241,7 +249,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       const h = lines.length * fontWorld * 1.25;
       return { w, h, lines, fontWorld };
     };
- 
+
     const paintText = (s) => {
       const { w, h, lines, fontWorld } = measureText(s);
       const centerWorld = { x: s.x + w / 2, y: s.y + h / 2 };
@@ -258,7 +266,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       lines.forEach((line, i) => eng.ctx.fillText(line, -halfWpx, -halfHpx + i * fontPx * 1.25));
       eng.ctx.restore();
     };
- 
+
     const paintStroke = (s, w, h) => {
       if (s.type === 'text') { paintText(s); return; }
       if (s.type === 'image') {
@@ -276,7 +284,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       }
       if (!s.points || !s.points.length) return;
       const baseW = Math.max(1, s.widthWorld * eng.scale);
- 
+
       if (s.erase) {
         eng.ctx.save(); eng.ctx.globalCompositeOperation = 'destination-out'; eng.ctx.strokeStyle = '#000'; eng.ctx.lineCap = 'round'; eng.ctx.lineJoin = 'round';
         eng.ctx.lineWidth = baseW;
@@ -288,7 +296,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
         eng.ctx.restore();
         return;
       }
- 
+
       if (s.points.length === 1) {
         const p = worldToScreen(s.points[0]);
         renderDot(eng.ctx, s.brush || 'pencil', p.x, p.y, s.color, baseW);
@@ -299,7 +307,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
         renderSegment(eng.ctx, s.brush || 'pencil', p1.x, p1.y, p2.x, p2.y, s.color, baseW);
       }
     };
- 
+
     // --- Selecció d'objectes ---
     const hitTestGroupId = (worldPos) => {
       const thresholdWorld = 10 / eng.scale;
@@ -338,7 +346,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       }
       return null;
     };
- 
+
     const getGroupBounds = (groupId) => {
       if (!groupId) return null;
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, found = false;
@@ -375,7 +383,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       });
       return found ? { minX, minY, maxX, maxY } : null;
     };
- 
+
     const getHandleScreenPositions = (groupId) => {
       const b = getGroupBounds(groupId);
       if (!b) return null;
@@ -389,7 +397,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
         scale: { x: bottomRight.x, y: bottomRight.y },
       };
     };
- 
+
     const rotateGroup = (groupId, centerWorld, angle) => {
       eng.strokes.forEach((s) => {
         if (s.groupId !== groupId) return;
@@ -402,7 +410,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
         }
       });
     };
- 
+
     const scaleGroup = (groupId, centerWorld, factor) => {
       if (!isFinite(factor) || factor <= 0) return;
       eng.strokes.forEach((s) => {
@@ -425,7 +433,20 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
         }
       });
     };
- 
+
+    const changeGroupColor = (groupId, newColor) => {
+      if (!groupId) return;
+      eng.strokes.forEach(s => {
+        if (s.groupId === groupId) {
+          s.color = newColor;
+        }
+      });
+      if (eng.redraw) eng.redraw();
+      triggerUpdate();
+    };
+    // Exponemos la función para usarla desde el componente
+    eng.changeGroupColor = changeGroupColor;
+
     const drawSelectionOutline = () => {
       if (!eng.selectedGroupId) return;
       const handles = getHandleScreenPositions(eng.selectedGroupId);
@@ -433,26 +454,39 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       const { topLeft, bottomRight, rotate, scale } = handles;
       eng.ctx.save();
       eng.ctx.strokeStyle = '#2B6CB0';
-      eng.ctx.lineWidth = 1.5;
+      eng.ctx.lineWidth = 2;
       eng.ctx.setLineDash([6, 4]);
       eng.ctx.strokeRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
- 
+
       eng.ctx.setLineDash([]);
+      // Línea hasta el handle de rotación
       eng.ctx.beginPath();
       eng.ctx.moveTo(rotate.x, topLeft.y);
       eng.ctx.lineTo(rotate.x, rotate.y);
       eng.ctx.stroke();
- 
+
+      // Handle de rotación (círculo más grande)
       eng.ctx.fillStyle = '#fff';
       eng.ctx.beginPath();
-      eng.ctx.arc(rotate.x, rotate.y, HANDLE_SIZE / 1.7, 0, Math.PI * 2);
+      eng.ctx.arc(rotate.x, rotate.y, HANDLE_SIZE / 1.5, 0, Math.PI * 2);
       eng.ctx.fill(); eng.ctx.stroke();
- 
+      // Icono de rotación dentro
+      eng.ctx.fillStyle = '#2B6CB0';
+      eng.ctx.beginPath();
+      eng.ctx.arc(rotate.x, rotate.y - 2, 3, 0, Math.PI * 2);
+      eng.ctx.fill();
+
+      // Handle de escala (cuadrado más grande)
+      eng.ctx.fillStyle = '#fff';
       eng.ctx.fillRect(scale.x - HANDLE_SIZE / 2, scale.y - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
       eng.ctx.strokeRect(scale.x - HANDLE_SIZE / 2, scale.y - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+      // Icono de escala
+      eng.ctx.fillStyle = '#2B6CB0';
+      eng.ctx.fillRect(scale.x - 4, scale.y - HANDLE_SIZE/2 + 4, 8, 2);
+      eng.ctx.fillRect(scale.x - HANDLE_SIZE/2 + 4, scale.y - 4, 2, 8);
       eng.ctx.restore();
     };
- 
+
     // ---------- Motor de renderitzat ----------
     eng.redraw = (withGrid = true, withSelection = true, clear = true) => {
       if (!eng.ctx || !canvasRef.current) return;
@@ -465,50 +499,90 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       eng.strokes.forEach(s => paintStroke(s, w, h));
       if (withSelection) drawSelectionOutline();
     };
- 
+
     const getScreenPos = (e) => {
       const rect = canvas.getBoundingClientRect();
       return { x: e.clientX - rect.left, y: e.clientY - rect.top };
     };
- 
+
+    // --- Manejo de punteros (multitouch mejorado) ---
     const handlePointerDown = (e) => {
       const pos = getScreenPos(e);
       const { mode, color, brush, thick } = uiRef.current;
- 
+      
+      // Registrar puntero activo
+      eng.activePointers.set(e.pointerId, {
+        x: pos.x,
+        y: pos.y,
+        type: e.pointerType, // 'pen', 'touch', 'mouse'
+      });
+
+      // Si ya hay un trazo en curso con lápiz, rechazar otros toques (palm rejection)
+      if (eng.currentStroke && e.pointerType !== 'pen') {
+        // Solo permitir si el trazo actual es con ratón y esto también es ratón
+        if (eng.currentStroke && eng.activePointers.size > 1) {
+          return; // Ignorar toques adicionales mientras se dibuja
+        }
+      }
+
+      // Comportamiento multitouch: 2 dedos = zoom/pan
+      if (eng.activePointers.size === 2) {
+        // Cancelar cualquier operación de un solo dedo
+        eng.panStart = null;
+        eng.dragStart = null;
+        eng.transformMode = null;
+        
+        const points = [...eng.activePointers.values()];
+        const dx = points[1].x - points[0].x;
+        const dy = points[1].y - points[0].y;
+        eng.pinchStartDist = Math.hypot(dx, dy);
+        eng.pinchStartScale = eng.scale;
+        eng.pinchStartPanX = eng.panX;
+        eng.pinchStartPanY = eng.panY;
+        eng.pinchMidX = (points[0].x + points[1].x) / 2;
+        eng.pinchMidY = (points[0].y + points[1].y) / 2;
+        return;
+      }
+
+      if (eng.activePointers.size > 2) return;
+
+      // Comportamiento normal (1 puntero)
       if (mode === 'text') return;
- 
+
       if (mode === 'pan') {
         eng.panStart = { x: pos.x, y: pos.y, panX0: eng.panX, panY0: eng.panY };
         return;
       }
- 
+
       if (mode === 'select') {
         if (eng.selectedGroupId) {
           const handles = getHandleScreenPositions(eng.selectedGroupId);
           if (handles) {
             const distRotate = Math.hypot(pos.x - handles.rotate.x, pos.y - handles.rotate.y);
-            if (distRotate <= HANDLE_SIZE + 5) {
+            if (distRotate <= HANDLE_SIZE + HANDLE_HIT_TOLERANCE) {
               const b = getGroupBounds(eng.selectedGroupId);
               const center = { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 };
               const worldPos = screenToWorld(pos);
               eng.transformMode = 'rotate';
               eng.transformCenter = center;
               eng.transformLast = Math.atan2(worldPos.y - center.y, worldPos.x - center.x);
+              canvas.setPointerCapture(e.pointerId);
               return;
             }
             const distScale = Math.hypot(pos.x - handles.scale.x, pos.y - handles.scale.y);
-            if (distScale <= HANDLE_SIZE + 5) {
+            if (distScale <= HANDLE_SIZE + HANDLE_HIT_TOLERANCE) {
               const b = getGroupBounds(eng.selectedGroupId);
               const center = { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 };
               const worldPos = screenToWorld(pos);
               eng.transformMode = 'scale';
               eng.transformCenter = center;
               eng.transformLast = Math.hypot(worldPos.x - center.x, worldPos.y - center.y) || 0.0001;
+              canvas.setPointerCapture(e.pointerId);
               return;
             }
           }
         }
- 
+
         const worldPos = screenToWorld(pos);
         const hitGroupId = hitTestGroupId(worldPos);
         eng.selectedGroupId = hitGroupId;
@@ -517,7 +591,8 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
         if (eng.redraw) eng.redraw();
         return;
       }
- 
+
+      // Modos de dibujo/borrado
       canvas.setPointerCapture(e.pointerId);
       const worldPos = screenToWorld(pos);
       const erase = mode === 'erase';
@@ -528,7 +603,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
         groupId: newGroupId()
       };
       eng.lastPx = pos;
- 
+
       const baseW = Math.max(1, eng.currentStroke.widthWorld * eng.scale);
       if (erase) {
         eng.ctx.save(); eng.ctx.globalCompositeOperation = 'destination-out'; eng.ctx.fillStyle = '#000';
@@ -537,16 +612,49 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
         renderDot(eng.ctx, brush, pos.x, pos.y, color, baseW);
       }
     };
- 
+
     const handlePointerMove = (e) => {
       const pos = getScreenPos(e);
+      
+      // Actualizar posición del puntero activo
+      if (eng.activePointers.has(e.pointerId)) {
+        eng.activePointers.set(e.pointerId, { ...eng.activePointers.get(e.pointerId), x: pos.x, y: pos.y });
+      }
+
+      // Gestión de pinch-to-zoom con 2 dedos
+      if (eng.activePointers.size === 2 && eng.pinchStartDist > 0) {
+        const points = [...eng.activePointers.values()];
+        const dx = points[1].x - points[0].x;
+        const dy = points[1].y - points[0].y;
+        const currentDist = Math.hypot(dx, dy);
+        const midX = (points[0].x + points[1].x) / 2;
+        const midY = (points[0].y + points[1].y) / 2;
+        
+        if (eng.pinchStartDist > 0) {
+          const scaleFactor = currentDist / eng.pinchStartDist;
+          const newScale = Math.min(4, Math.max(0.2, eng.pinchStartScale * scaleFactor));
+          
+          // Ajustar pan para hacer zoom centrado en el punto medio
+          const worldX = (eng.pinchMidX - eng.pinchStartPanX) / eng.pinchStartScale;
+          const worldY = (eng.pinchMidY - eng.pinchStartPanY) / eng.pinchStartScale;
+          
+          eng.scale = newScale;
+          eng.panX = midX - worldX * newScale;
+          eng.panY = midY - worldY * newScale;
+          
+          setZoomLabel(Math.round(eng.scale * 100) + '%');
+          if (eng.redraw) eng.redraw();
+        }
+        return;
+      }
+
       if (uiRef.current.mode === 'pan' && eng.panStart) {
         eng.panX = eng.panStart.panX0 + (pos.x - eng.panStart.x);
         eng.panY = eng.panStart.panY0 + (pos.y - eng.panStart.y);
         if (eng.redraw) eng.redraw();
         return;
       }
- 
+
       if (uiRef.current.mode === 'select') {
         if (eng.transformMode === 'rotate' && eng.selectedGroupId) {
           const worldPos = screenToWorld(pos);
@@ -584,11 +692,11 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
         }
         return;
       }
- 
+
       if (!eng.currentStroke) return;
       const worldPos = screenToWorld(pos);
       eng.currentStroke.points.push(worldPos);
- 
+
       const baseW = Math.max(1, eng.currentStroke.widthWorld * eng.scale);
       if (eng.currentStroke.erase) {
         eng.ctx.save(); eng.ctx.globalCompositeOperation = 'destination-out'; eng.ctx.strokeStyle = '#000'; eng.ctx.lineCap = 'round'; eng.ctx.lineJoin = 'round';
@@ -600,18 +708,49 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       }
       eng.lastPx = pos;
     };
- 
-    const handlePointerUp = () => {
+
+    const handlePointerUp = (e) => {
+      // Eliminar puntero del registro
+      eng.activePointers.delete(e.pointerId);
+
+      // Si terminó un gesto de pinch, limpiar
+      if (eng.activePointers.size < 2) {
+        eng.pinchStartDist = 0;
+      }
+
       if (uiRef.current.mode === 'pan') { eng.panStart = null; return; }
-      if (uiRef.current.mode === 'select') { eng.dragStart = null; eng.transformMode = null; return; }
+      if (uiRef.current.mode === 'select') { 
+        eng.dragStart = null; 
+        eng.transformMode = null; 
+        // Liberar captura si la había
+        try { canvas.releasePointerCapture(e.pointerId); } catch (ex) {}
+        return; 
+      }
       if (!eng.currentStroke) return;
       eng.strokes.push(eng.currentStroke);
       eng.currentStroke = null; eng.lastPx = null;
- 
-      // ---------- NOMÉS AQUÍ S'EMET (acció LOCAL) ----------
-      triggerUpdate(); // per defecte emitir = true
+
+      // Emitir actualización
+      triggerUpdate();
     };
- 
+
+    const handlePointerCancel = (e) => {
+      // Similar a pointerup pero limpiando estado
+      eng.activePointers.delete(e.pointerId);
+      if (eng.activePointers.size < 2) {
+        eng.pinchStartDist = 0;
+      }
+      eng.panStart = null;
+      eng.dragStart = null;
+      eng.transformMode = null;
+      if (eng.currentStroke) {
+        eng.strokes.push(eng.currentStroke);
+        eng.currentStroke = null;
+        eng.lastPx = null;
+        triggerUpdate();
+      }
+    };
+
     const handleWheel = (e) => {
       e.preventDefault();
       const pos = getScreenPos(e);
@@ -623,26 +762,26 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       setZoomLabel(Math.round(eng.scale * 100) + '%');
       if (eng.redraw) eng.redraw();
     };
- 
+
     window.addEventListener('resize', setupCanvas);
     canvas.addEventListener('pointerdown', handlePointerDown);
     canvas.addEventListener('pointermove', handlePointerMove);
     canvas.addEventListener('pointerup', handlePointerUp);
-    canvas.addEventListener('pointercancel', handlePointerUp);
+    canvas.addEventListener('pointercancel', handlePointerCancel);
     canvas.addEventListener('wheel', handleWheel, { passive: false });
- 
+
     setupCanvas();
- 
+
     return () => {
       window.removeEventListener('resize', setupCanvas);
       canvas.removeEventListener('pointerdown', handlePointerDown);
       canvas.removeEventListener('pointermove', handlePointerMove);
       canvas.removeEventListener('pointerup', handlePointerUp);
-      canvas.removeEventListener('pointercancel', handlePointerUp);
+      canvas.removeEventListener('pointercancel', handlePointerCancel);
       canvas.removeEventListener('wheel', handleWheel);
     };
   }, []);
- 
+
   // ---------- EINES EXTERNES I BOTONS ----------
   const applyMathTool = (val) => {
     setMathMenuOpen(false);
@@ -652,11 +791,11 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
     const cy = (-eng.panY + wrapRef.current.clientHeight / 2) / eng.scale;
     const s = 100 / eng.scale;
     const groupId = newGroupId();
- 
+
     const createLine = (x1, y1, x2, y2, c, w) => ({
       type: 'path', color: c, widthWorld: w, erase: false, brush: 'pencil', points: [{x:x1, y:y1}, {x:x2, y:y2}], groupId
     });
- 
+
     if (val === 'cube') {
       const lines = [
         [0,0, s,0], [s,0, s,s], [s,s, 0,s], [0,s, 0,0],
@@ -685,10 +824,10 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
         }
       }
     }
- 
+
     triggerUpdate(); // acció local → emet
   };
- 
+
   const undo = () => {
     const arr = engineRef.current.strokes;
     if (arr.length === 0) { triggerUpdate(); return; }
@@ -705,26 +844,26 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
     }
     triggerUpdate(); // acció local → emet
   };
- 
+
   const clearAll = () => {
     if(confirm('Esborrar tota la pissarra?')){
       engineRef.current.strokes = [];
       triggerUpdate(); // acció local → emet
     }
   };
- 
+
   // ---------- INSERIR IMATGE DEL PANELL 3D ----------
   const handleInsertSnapshot = (dataUrl) => {
     const eng = engineRef.current;
     const wrap = wrapRef.current;
     if (!eng || !wrap) return;
- 
+
     const viewCenterX = (wrap.clientWidth / 2 - eng.panX) / eng.scale;
     const viewCenterY = (wrap.clientHeight / 2 - eng.panY) / eng.scale;
- 
+
     const img = new Image();
     img.src = dataUrl;
- 
+
     const stroke = {
       type: 'image',
       groupId: newGroupId(),
@@ -736,9 +875,9 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       img: null,
       dataUrl,
     };
- 
+
     eng.strokes.push(stroke);
- 
+
     img.onload = () => {
       const aspect = img.naturalHeight / img.naturalWidth;
       stroke.widthWorld = 200;
@@ -746,10 +885,10 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       stroke.img = img;
       triggerUpdate(); // acció local → emet
     };
- 
+
     triggerUpdate(); // acció local → emet
   };
- 
+
   // ---------- DESCARREGAR PNG ----------
   const handleDownload = () => {
     const eng = engineRef.current;
@@ -757,7 +896,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
       alert("La pissarra està buida!");
       return;
     }
- 
+
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     eng.strokes.forEach(s => {
       if (s.type === 'text') {
@@ -783,44 +922,44 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
         });
       }
     });
- 
+
     if (!isFinite(minX)) return;
- 
+
     const margin = 40;
     const labelHeight = 40;
- 
+
     const offCanvas = document.createElement('canvas');
     const width = maxX - minX + 2 * margin;
     const height = maxY - minY + 2 * margin + labelHeight;
     offCanvas.width = Math.ceil(width);
     offCanvas.height = Math.ceil(height);
     const offCtx = offCanvas.getContext('2d');
- 
+
     offCtx.fillStyle = '#FCFDFE';
     offCtx.fillRect(0, 0, offCanvas.width, offCanvas.height);
- 
+
     offCtx.fillStyle = '#6B7C93';
     offCtx.font = '16px Inter, sans-serif';
     const label = `${subject || 'Subject'} | ${unit || 'Unit'} | ${session || 'Session'}`;
     offCtx.fillText(label, margin, margin + 6);
- 
+
     const originalCtx = eng.ctx;
     const originalPanX = eng.panX;
     const originalPanY = eng.panY;
     const originalScale = eng.scale;
- 
+
     eng.ctx = offCtx;
     eng.panX = -minX + margin;
     eng.panY = -minY + margin + labelHeight;
     eng.scale = 1;
- 
+
     eng.redraw(false, false, false);
- 
+
     eng.ctx = originalCtx;
     eng.panX = originalPanX;
     eng.panY = originalPanY;
     eng.scale = originalScale;
- 
+
     const link = document.createElement('a');
     const subj = (subject || 'subject').trim().replace(/\s+/g, '_');
     const un = (unit || 'unit').trim().replace(/\s+/g, '_');
@@ -829,21 +968,40 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
     link.href = offCanvas.toDataURL('image/png');
     link.click();
   };
- 
+
   useImperativeHandle(ref, () => ({
     download: handleDownload
   }));
- 
+
+  // Manejador para cambiar color: si hay objeto seleccionado, cambia su color
+  const handleColorChange = (newColor) => {
+    const eng = engineRef.current;
+    if (mode === 'select' && eng.selectedGroupId) {
+      // Cambiar color del grupo seleccionado
+      eng.changeGroupColor(eng.selectedGroupId, newColor);
+      setColor(newColor);
+    } else {
+      // Comportamiento normal: cambiar color y activar modo dibujo
+      setColor(newColor);
+      setMode('draw');
+    }
+  };
+
   const cursorStyle = mode === 'pan' ? 'grab' : mode === 'text' ? 'text' : mode === 'select' ? 'pointer' : 'crosshair';
- 
+
   return (
     <div className="board-wrap" ref={wrapRef}>
       <canvas ref={canvasRef} style={{ cursor: cursorStyle, touchAction: 'none' }}></canvas>
- 
+
       <div className="toolbar">
         <div className="swatch-group">
           {PALETTE_COLORS.map(c => (
-            <button key={c} className={`swatch ${color === c ? 'active' : ''}`} style={{ background: c }} onClick={() => {setColor(c); setMode('draw');}} />
+            <button 
+              key={c} 
+              className={`swatch ${color === c ? 'active' : ''}`} 
+              style={{ background: c }} 
+              onClick={() => handleColorChange(c)} 
+            />
           ))}
         </div>
         <div className="divider"></div>
@@ -930,7 +1088,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
         <button className="tool-btn" onClick={undo}>↺</button>
         <button className="tool-btn" onClick={clearAll}>🗑️</button>
         <button className="tool-btn" onClick={handleDownload} title="Descarregar PNG">⬇️</button>
- 
+
         <div className="divider"></div>
         <button
           className={`tool-btn ${show3DPanel ? 'active' : ''}`}
@@ -940,31 +1098,31 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger }, ref
           🧊 3D
         </button>
       </div>
- 
+
       <div className="canvas-utils">
         <span className="zoom-label">{zoomLabel}</span>
       </div>
- 
+
       {show3DPanel && (
         <Solid3DPanel
           onClose={() => setShow3DPanel(false)}
           onInsertSnapshot={handleInsertSnapshot}
         />
       )}
- 
-      {props.showRoom && (
-  <RoomManager 
-    getCanvasState={() => engineRef.current.strokes} 
-    setCanvasState={(nousTracos) => {
-      engineRef.current.strokes = nousTracos;
-      triggerUpdate();
-    }} 
-  />
-)}
+
+      {showRoom && (
+        <RoomManager 
+          getCanvasState={() => engineRef.current.strokes} 
+          setCanvasState={(nousTracos) => {
+            engineRef.current.strokes = nousTracos;
+            triggerUpdate();
+          }} 
+        />
+      )}
     </div>
   );
 });
- 
+
 /* =========================================================================
    BIBLIOTECA DE SÒLIDS 3D (component Solid3DPanel)
    ========================================================================= */
@@ -972,14 +1130,14 @@ const SQ2 = Math.sqrt(2);
 const SQ3 = Math.sqrt(3);
 const SQ5 = Math.sqrt(5);
 const PHI_3D = (1 + SQ5) / 2;
- 
+
 // Dades base dels sòlids platònics
 const TETRA_VERTS = [1, 1, 1, -1, -1, 1, -1, 1, -1, 1, -1, -1];
 const TETRA_IDX = [2, 1, 0, 0, 3, 2, 1, 3, 0, 2, 3, 1];
- 
+
 const OCTA_VERTS = [1, 0, 0, -1, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 1, 0, 0, -1];
 const OCTA_IDX = [0, 2, 4, 0, 4, 3, 0, 3, 5, 0, 5, 2, 1, 2, 5, 1, 5, 3, 1, 3, 4, 1, 4, 2];
- 
+
 const ICOSA_VERTS = [
   -1, PHI_3D, 0, 1, PHI_3D, 0, -1, -PHI_3D, 0, 1, -PHI_3D, 0,
   0, -1, PHI_3D, 0, 1, PHI_3D, 0, -1, -PHI_3D, 0, 1, -PHI_3D,
@@ -991,7 +1149,7 @@ const ICOSA_IDX = [
   3, 9, 4, 3, 4, 2, 3, 2, 6, 3, 6, 8, 3, 8, 9,
   4, 9, 5, 2, 4, 11, 6, 2, 10, 8, 6, 7, 9, 8, 1,
 ];
- 
+
 const DODECA_R = 1 / PHI_3D;
 const DODECA_VERTS = [
   -1, -1, -1, -1, -1, 1, -1, 1, -1, -1, 1, 1,
@@ -1014,7 +1172,7 @@ const DODECA_IDX = [
   19, 5, 14, 19, 14, 4, 19, 4, 17,
   1, 12, 14, 1, 14, 5, 1, 5, 9,
 ];
- 
+
 const facesFromTriangleFan = (indices, trianglesPerFace) => {
   const faces = [];
   const step = 3 * trianglesPerFace;
@@ -1029,7 +1187,7 @@ const facesFromTriangleFan = (indices, trianglesPerFace) => {
   }
   return faces;
 };
- 
+
 const polyhedronFacePoints = (rawVerts, indices, trianglesPerFace, edgeLength) => {
   const verts = [];
   for (let i = 0; i < rawVerts.length; i += 3) {
@@ -1042,7 +1200,7 @@ const polyhedronFacePoints = (rawVerts, indices, trianglesPerFace, edgeLength) =
     return { x: v.x * scale, y: v.y * scale, z: v.z * scale };
   }));
 };
- 
+
 function makeFaceGeometry(points) {
   const geom = new THREE.BufferGeometry();
   const positions = [];
@@ -1055,18 +1213,18 @@ function makeFaceGeometry(points) {
   geom.computeVertexNormals();
   return geom;
 }
- 
+
 const FACE_COLOR = 0xB9C4CF;
 const newFaceMaterial = () => new THREE.MeshStandardMaterial({
   color: FACE_COLOR, side: THREE.DoubleSide, roughness: 0.6, metalness: 0.05,
 });
- 
+
 const faceCentroidDirection = (pts) => {
   const c = pts.reduce((acc, p) => ({ x: acc.x + p.x / pts.length, y: acc.y + p.y / pts.length, z: acc.z + p.z / pts.length }), { x: 0, y: 0, z: 0 });
   const len = Math.hypot(c.x, c.y, c.z) || 1;
   return { x: c.x / len, y: c.y / len, z: c.z / len };
 };
- 
+
 function buildSolidObject(def, params) {
   const group = new THREE.Group();
   if (def.kind === 'flat') {
@@ -1093,7 +1251,7 @@ function buildSolidObject(def, params) {
   }
   return group;
 }
- 
+
 function setExplodeAmount(group, amount) {
   if (!group || !group.userData.explodable) return;
   group.children.forEach((child) => {
@@ -1103,7 +1261,7 @@ function setExplodeAmount(group, amount) {
     }
   });
 }
- 
+
 function disposeObject(obj) {
   obj.traverse((o) => {
     if (o.geometry) o.geometry.dispose();
@@ -1113,16 +1271,16 @@ function disposeObject(obj) {
     }
   });
 }
- 
+
 function defaultParams(def) {
   const obj = {};
   def.params.forEach((p) => { obj[p.key] = p.default; });
   return obj;
 }
- 
+
 const PALETTE_3D = ['#EB5A2E', '#2B6CB0', '#2E8B57', '#8E44AD', '#F2C14E', '#123B61', '#1B2733', '#FFFFFF'];
 const EXPLODE_MAX = 1.6;
- 
+
 const SOLIDS_3D = {
   cub: {
     label: 'Cub', emoji: '🧊', kind: 'flat',
@@ -1310,7 +1468,7 @@ const SOLIDS_3D = {
     }),
   },
 };
- 
+
 function Solid3DPanel({ onClose, onInsertSnapshot }) {
   const mountRef = useRef(null);
   const threeRef = useRef({
@@ -1319,7 +1477,7 @@ function Solid3DPanel({ onClose, onInsertSnapshot }) {
     rotX: -0.5, rotY: 0.6, zoom: 6, autoRotate: false,
     activePointers: new Map(), pinchLastDist: 0, pinchLastMid: null,
   });
- 
+
   const [solidKey, setSolidKey] = useState('cub');
   const [params, setParams] = useState(() => defaultParams(SOLIDS_3D.cub));
   const [paintColor, setPaintColor] = useState('#EB5A2E');
@@ -1327,33 +1485,33 @@ function Solid3DPanel({ onClose, onInsertSnapshot }) {
   const [autoRotate, setAutoRotate] = useState(false);
   const [explode, setExplode] = useState(0);
   const [pos, setPos] = useState({ x: 70, y: 70 });
- 
+
   const paintColorRef = useRef(paintColor);
   useEffect(() => { paintColorRef.current = paintColor; }, [paintColor]);
   const paintModeRef = useRef(paintMode);
   useEffect(() => { paintModeRef.current = paintMode; }, [paintMode]);
   useEffect(() => { threeRef.current.autoRotate = autoRotate; }, [autoRotate]);
- 
+
   const solidDef = SOLIDS_3D[solidKey];
- 
+
   useEffect(() => {
     const mount = mountRef.current;
     const t = threeRef.current;
     const width = Math.max(1, mount.clientWidth), height = Math.max(1, mount.clientHeight);
- 
+
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(width, height);
     mount.appendChild(renderer.domElement);
- 
+
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
     scene.add(new THREE.AmbientLight(0xffffff, 0.7));
     const key1 = new THREE.DirectionalLight(0xffffff, 0.7); key1.position.set(3, 4, 5); scene.add(key1);
     const key2 = new THREE.DirectionalLight(0xffffff, 0.3); key2.position.set(-4, -2, -3); scene.add(key2);
- 
+
     t.renderer = renderer; t.scene = scene; t.camera = camera;
- 
+
     const animate = () => {
       const tt = threeRef.current;
       if (tt.solid) {
@@ -1366,7 +1524,7 @@ function Solid3DPanel({ onClose, onInsertSnapshot }) {
       tt.raf = requestAnimationFrame(animate);
     };
     animate();
- 
+
     const handleResize = () => {
       const w = mount.clientWidth, h = mount.clientHeight;
       if (!w || !h) return;
@@ -1376,7 +1534,7 @@ function Solid3DPanel({ onClose, onInsertSnapshot }) {
     };
     const ro = new ResizeObserver(handleResize);
     ro.observe(mount);
- 
+
     return () => {
       cancelAnimationFrame(threeRef.current.raf);
       ro.disconnect();
@@ -1385,7 +1543,7 @@ function Solid3DPanel({ onClose, onInsertSnapshot }) {
       if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
     };
   }, []);
- 
+
   const rebuildSolid = () => {
     const t = threeRef.current;
     if (!t.scene) return;
@@ -1393,21 +1551,21 @@ function Solid3DPanel({ onClose, onInsertSnapshot }) {
     t.solid = buildSolidObject(solidDef, params);
     t.scene.add(t.solid);
   };
- 
+
   useEffect(() => { rebuildSolid(); }, [solidKey, params]);
- 
+
   useEffect(() => {
     const t = threeRef.current;
     if (t.solid) setExplodeAmount(t.solid, explode * EXPLODE_MAX);
   }, [explode, solidKey, params]);
- 
+
   const selectSolid = (key) => {
     setSolidKey(key);
     setParams(defaultParams(SOLIDS_3D[key]));
     setPaintMode(false);
     setExplode(0);
   };
- 
+
   const handleFaceClick = (clientX, clientY) => {
     const t = threeRef.current;
     if (!t.solid || !mountRef.current) return;
@@ -1430,12 +1588,12 @@ function Solid3DPanel({ onClose, onInsertSnapshot }) {
       hit.object.material.color.set(color);
     }
   };
- 
+
   const onViewportDown = (e) => {
     const t = threeRef.current;
     t.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     e.currentTarget.setPointerCapture(e.pointerId);
- 
+
     if (t.activePointers.size === 2) {
       // Comença un gest de pinça amb dos dits: no interpretem cap dit com a rotació.
       t.dragging = false;
@@ -1444,7 +1602,7 @@ function Solid3DPanel({ onClose, onInsertSnapshot }) {
       return;
     }
     if (t.activePointers.size > 2) return;
- 
+
     t.dragging = true; t.moved = 0; t.lastX = e.clientX; t.lastY = e.clientY;
   };
   const onViewportMove = (e) => {
@@ -1452,7 +1610,7 @@ function Solid3DPanel({ onClose, onInsertSnapshot }) {
     if (t.activePointers.has(e.pointerId)) {
       t.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     }
- 
+
     if (t.activePointers.size >= 2) {
       // Pinça amb dos dits: apropar/allunyar per fer zoom (equivalent a la roda del ratolí)
       const pts = [...t.activePointers.values()].slice(0, 2);
@@ -1464,7 +1622,7 @@ function Solid3DPanel({ onClose, onInsertSnapshot }) {
       t.pinchLastDist = newDist;
       return;
     }
- 
+
     if (!t.dragging) return;
     const dx = e.clientX - t.lastX, dy = e.clientY - t.lastY;
     t.moved += Math.abs(dx) + Math.abs(dy);
@@ -1493,7 +1651,7 @@ function Solid3DPanel({ onClose, onInsertSnapshot }) {
     const t = threeRef.current;
     t.zoom = Math.max(2.5, Math.min(14, t.zoom + (e.deltaY > 0 ? 0.4 : -0.4)));
   };
- 
+
   const headerDragRef = useRef(null);
   const onHeaderDown = (e) => {
     headerDragRef.current = { x: e.clientX, y: e.clientY, ox: pos.x, oy: pos.y };
@@ -1505,7 +1663,7 @@ function Solid3DPanel({ onClose, onInsertSnapshot }) {
     setPos({ x: d.ox + (e.clientX - d.x), y: d.oy + (e.clientY - d.y) });
   };
   const onHeaderUp = () => { headerDragRef.current = null; };
- 
+
   const handleSnapshot = () => {
     const t = threeRef.current;
     if (!t.renderer) return;
@@ -1513,9 +1671,9 @@ function Solid3DPanel({ onClose, onInsertSnapshot }) {
     const dataUrl = t.renderer.domElement.toDataURL('image/png');
     onInsertSnapshot(dataUrl);
   };
- 
+
   const metrics = solidDef.metrics(params);
- 
+
   return (
     <div style={{
       position: 'fixed', left: pos.x, top: pos.y, width: 660, height: 480,
@@ -1540,7 +1698,7 @@ function Solid3DPanel({ onClose, onInsertSnapshot }) {
           ✕
         </button>
       </div>
- 
+
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         <div style={{ width: 168, overflowY: 'auto', borderRight: '1px solid #E4E9EF', padding: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
           {Object.entries(SOLIDS_3D).map(([key, def]) => (
@@ -1553,7 +1711,7 @@ function Solid3DPanel({ onClose, onInsertSnapshot }) {
             </button>
           ))}
         </div>
- 
+
         <div
           ref={mountRef}
           onPointerDown={onViewportDown} onPointerMove={onViewportMove} onPointerUp={onViewportUp} onPointerCancel={onViewportUp} onWheel={onViewportWheel}
@@ -1564,7 +1722,7 @@ function Solid3DPanel({ onClose, onInsertSnapshot }) {
           </div>
         </div>
       </div>
- 
+
       <div style={{ borderTop: '1px solid #E4E9EF', padding: '10px 14px', display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'flex-start' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 170 }}>
           {solidDef.params.map((p) => (
@@ -1577,7 +1735,7 @@ function Solid3DPanel({ onClose, onInsertSnapshot }) {
               />
             </label>
           ))}
- 
+
           <label style={{ fontSize: 12, color: solidDef.kind === 'flat' ? '#1B2733' : '#A6B1BE' }}>
             🧩 Desplegar (veure com es forma)
             <input
@@ -1591,13 +1749,13 @@ function Solid3DPanel({ onClose, onInsertSnapshot }) {
             )}
           </label>
         </div>
- 
+
         <div style={{ fontSize: 12, color: '#1B2733', minWidth: 160, lineHeight: 1.6 }}>
           {Object.entries(metrics).map(([k, v]) => (
             <div key={k}><b>{k}:</b> {v}</div>
           ))}
         </div>
- 
+
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
             <input type="checkbox" checked={paintMode} onChange={(e) => setPaintMode(e.target.checked)} />
@@ -1616,7 +1774,7 @@ function Solid3DPanel({ onClose, onInsertSnapshot }) {
             Rotació automàtica
           </label>
         </div>
- 
+
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginLeft: 'auto' }}>
           <button onClick={rebuildSolid} style={{ fontSize: 12, padding: '6px 10px', borderRadius: 8, border: '1px solid #D8DEE6', background: '#fff', cursor: 'pointer' }}>↺ Reinicia colors</button>
           <button onClick={handleSnapshot} style={{ fontSize: 12, padding: '6px 10px', borderRadius: 8, border: 'none', background: '#EB5A2E', color: '#fff', cursor: 'pointer', fontWeight: 600 }}>📌 Insereix a la pissarra</button>
@@ -1625,5 +1783,5 @@ function Solid3DPanel({ onClose, onInsertSnapshot }) {
     </div>
   );
 }
- 
+
 export default InfiniteCanvas;
