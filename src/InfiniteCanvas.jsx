@@ -1,12 +1,10 @@
-import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react';
+import { useEffect, useRef, useState, forwardRef, useImperativeHandle, useCallback } from 'react';
 import * as THREE from 'three';
 import RoomManager from './RoomManager';
 
-// Genera un identificador únic per agrupar traços
 let __groupSeq = 0;
 const newGroupId = () => `g${Date.now()}_${(__groupSeq++)}`;
 
-// Distància d'un punt a un segment (hit-testing independent del zoom)
 const distToSegmentWorld = (p, a, b) => {
   const dx = b.x - a.x, dy = b.y - a.y;
   const lenSq = dx * dx + dy * dy;
@@ -16,30 +14,27 @@ const distToSegmentWorld = (p, a, b) => {
   return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
 };
 
-// Rota un punt world al voltant d'un centre, un angle donat (radians)
 const rotatePointAround = (p, center, angle) => {
   const dx = p.x - center.x, dy = p.y - center.y;
   const cos = Math.cos(angle), sin = Math.sin(angle);
   return { x: center.x + dx * cos - dy * sin, y: center.y + dx * sin + dy * cos };
 };
 
-// Mida i posició (en px de pantalla) de les nanses de rotar/escalar
-const HANDLE_SIZE = 20; // Aumentado para mejor uso táctil
-const HANDLE_HIT_TOLERANCE = 15; // Tolerancia ampliada
+const HANDLE_SIZE = 20;
+const HANDLE_HIT_TOLERANCE = 15;
 const ROTATE_HANDLE_OFFSET = 40;
-const WHEEL_SCALE_STEP = 0.06;
-const WHEEL_ROTATE_STEP = Math.PI / 24;
 
-// Noms dels pinzells
 const BRUSH_LABELS = {
   pencil: 'Llapis', marker: 'Retolador', highlighter: 'Fluorescent', spray: 'Esprai',
   neon: 'Neó', calligraphy: 'Cal·ligrafia', chalk: 'Guix', dotted: 'Punts',
 };
 
-// Paleta de colors
 const PALETTE_COLORS = ['#123B61', '#1B2733', '#EB5A2E', '#2E8B57', '#2B6CB0', '#8E44AD'];
 
-const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showRoom }, ref) => {
+const InfiniteCanvas = forwardRef(({
+  subject, unit, session, clearTrigger, showRoom,
+  onToggleRoom, onNewBoard, onDownload, onToggleFullscreen, isFullscreen
+}, ref) => {
   const [mode, setMode] = useState('draw');
   const [color, setColor] = useState('#123B61');
   const [brush, setBrush] = useState('pencil');
@@ -47,7 +42,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
   const [zoomLabel, setZoomLabel] = useState('100%');
   const [mathMenuOpen, setMathMenuOpen] = useState(false);
   const [show3DPanel, setShow3DPanel] = useState(false);
-  const [selectionUI, setSelectionUI] = useState(null);
+  const [selectedId, setSelectedId] = useState(null); // NUEVO: estado para el ID seleccionado
   const mathMenuRef = useRef(null);
 
   const canvasRef = useRef(null);
@@ -55,21 +50,23 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
   const engineRef = useRef({
     ctx: null, strokes: [], currentStroke: null,
     panX: 0, panY: 0, scale: 1,
-    lastPx: null, panStart: null, activeTextArea: null,
+    lastPx: null, panStart: null,
     selectedGroupId: null, dragStart: null,
     transformMode: null, transformCenter: null, transformLast: null,
     redraw: null,
-    // Multitouch state
     activePointers: new Map(),
-    pinchStartDist: 0,
-    pinchStartScale: 1,
-    pinchStartPanX: 0,
-    pinchStartPanY: 0,
-    pinchMidX: 0,
-    pinchMidY: 0,
+    pinchStartDist: 0, pinchStartScale: 1,
+    pinchStartPanX: 0, pinchStartPanY: 0,
+    pinchMidX: 0, pinchMidY: 0,
   });
 
-  // triggerUpdate amb control d'emissió
+  // Sincronizar el estado de selectedId con el ref cada vez que cambie la selección interna
+  // Esto se hace en los handlers de pointer y en el efecto de cambio de modo
+
+  const getCanvasState = useCallback(() => {
+    return engineRef.current.strokes;
+  }, []);
+
   const triggerUpdate = (emitir = true) => {
     const eng = engineRef.current;
     if (!eng.redraw) return;
@@ -83,17 +80,16 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
         eng.redraw();
       });
     });
-    // Només emetre si és una acció LOCAL (no una recepció remota)
     if (emitir && window.broadcastCanvasUpdate) {
       window.broadcastCanvasUpdate();
     }
   };
 
-  // En sortir del mode "seleccionar", esborrem la selecció visible.
   useEffect(() => {
     if (mode !== 'select') {
       engineRef.current.selectedGroupId = null;
       engineRef.current.transformMode = null;
+      setSelectedId(null); // Limpiar estado visual
       if (engineRef.current.redraw) engineRef.current.redraw();
     }
   }, [mode]);
@@ -101,7 +97,6 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
   const uiRef = useRef({ mode, color, brush, thick });
   useEffect(() => { uiRef.current = { mode, color, brush, thick }; }, [mode, color, brush, thick]);
 
-  // clearTrigger: esborra tota la pissarra i emet (acció local)
   useEffect(() => {
     if (clearTrigger > 0) {
       engineRef.current.strokes = [];
@@ -109,11 +104,10 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
       engineRef.current.panY = 0;
       engineRef.current.scale = 1;
       setZoomLabel('100%');
-      triggerUpdate(); // emet perquè per defecte és true
+      triggerUpdate();
     }
   }, [clearTrigger]);
 
-  // Tanca el menú de "Mates" en clicar fora.
   useEffect(() => {
     if (!mathMenuOpen) return;
     const handleClickOutside = (e) => {
@@ -125,7 +119,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
     return () => document.removeEventListener('pointerdown', handleClickOutside);
   }, [mathMenuOpen]);
 
-  // ---------- CONFIGURACIÓ DEL CANVAS ----------
+  // ---------- CONFIGURACIÓN DEL CANVAS ----------
   useEffect(() => {
     const canvas = canvasRef.current;
     const wrap = wrapRef.current;
@@ -308,7 +302,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
       }
     };
 
-    // --- Selecció d'objectes ---
+    // --- Selección de objetos ---
     const hitTestGroupId = (worldPos) => {
       const thresholdWorld = 10 / eng.scale;
       for (let i = eng.strokes.length - 1; i >= 0; i--) {
@@ -444,7 +438,6 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
       if (eng.redraw) eng.redraw();
       triggerUpdate();
     };
-    // Exponemos la función para usarla desde el componente
     eng.changeGroupColor = changeGroupColor;
 
     const drawSelectionOutline = () => {
@@ -459,35 +452,29 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
       eng.ctx.strokeRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
 
       eng.ctx.setLineDash([]);
-      // Línea hasta el handle de rotación
       eng.ctx.beginPath();
       eng.ctx.moveTo(rotate.x, topLeft.y);
       eng.ctx.lineTo(rotate.x, rotate.y);
       eng.ctx.stroke();
 
-      // Handle de rotación (círculo más grande)
       eng.ctx.fillStyle = '#fff';
       eng.ctx.beginPath();
       eng.ctx.arc(rotate.x, rotate.y, HANDLE_SIZE / 1.5, 0, Math.PI * 2);
       eng.ctx.fill(); eng.ctx.stroke();
-      // Icono de rotación dentro
       eng.ctx.fillStyle = '#2B6CB0';
       eng.ctx.beginPath();
       eng.ctx.arc(rotate.x, rotate.y - 2, 3, 0, Math.PI * 2);
       eng.ctx.fill();
 
-      // Handle de escala (cuadrado más grande)
       eng.ctx.fillStyle = '#fff';
       eng.ctx.fillRect(scale.x - HANDLE_SIZE / 2, scale.y - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
       eng.ctx.strokeRect(scale.x - HANDLE_SIZE / 2, scale.y - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
-      // Icono de escala
       eng.ctx.fillStyle = '#2B6CB0';
       eng.ctx.fillRect(scale.x - 4, scale.y - HANDLE_SIZE/2 + 4, 8, 2);
       eng.ctx.fillRect(scale.x - HANDLE_SIZE/2 + 4, scale.y - 4, 2, 8);
       eng.ctx.restore();
     };
 
-    // ---------- Motor de renderitzat ----------
     eng.redraw = (withGrid = true, withSelection = true, clear = true) => {
       if (!eng.ctx || !canvasRef.current) return;
       const w = canvasRef.current.clientWidth;
@@ -505,29 +492,18 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
       return { x: e.clientX - rect.left, y: e.clientY - rect.top };
     };
 
-    // --- Manejo de punteros (multitouch mejorado) ---
+    // --- Manejo de punteros ---
     const handlePointerDown = (e) => {
       const pos = getScreenPos(e);
       const { mode, color, brush, thick } = uiRef.current;
       
-      // Registrar puntero activo
-      eng.activePointers.set(e.pointerId, {
-        x: pos.x,
-        y: pos.y,
-        type: e.pointerType, // 'pen', 'touch', 'mouse'
-      });
+      eng.activePointers.set(e.pointerId, { x: pos.x, y: pos.y, type: e.pointerType });
 
-      // Si ya hay un trazo en curso con lápiz, rechazar otros toques (palm rejection)
       if (eng.currentStroke && e.pointerType !== 'pen') {
-        // Solo permitir si el trazo actual es con ratón y esto también es ratón
-        if (eng.currentStroke && eng.activePointers.size > 1) {
-          return; // Ignorar toques adicionales mientras se dibuja
-        }
+        if (eng.currentStroke && eng.activePointers.size > 1) return;
       }
 
-      // Comportamiento multitouch: 2 dedos = zoom/pan
       if (eng.activePointers.size === 2) {
-        // Cancelar cualquier operación de un solo dedo
         eng.panStart = null;
         eng.dragStart = null;
         eng.transformMode = null;
@@ -546,7 +522,6 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
 
       if (eng.activePointers.size > 2) return;
 
-      // Comportamiento normal (1 puntero)
       if (mode === 'text') return;
 
       if (mode === 'pan') {
@@ -586,13 +561,13 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
         const worldPos = screenToWorld(pos);
         const hitGroupId = hitTestGroupId(worldPos);
         eng.selectedGroupId = hitGroupId;
+        setSelectedId(hitGroupId); // Actualizar estado para el botón
         eng.dragStart = hitGroupId ? { x: pos.x, y: pos.y } : null;
         eng.transformMode = null;
         if (eng.redraw) eng.redraw();
         return;
       }
 
-      // Modos de dibujo/borrado
       canvas.setPointerCapture(e.pointerId);
       const worldPos = screenToWorld(pos);
       const erase = mode === 'erase';
@@ -616,12 +591,10 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
     const handlePointerMove = (e) => {
       const pos = getScreenPos(e);
       
-      // Actualizar posición del puntero activo
       if (eng.activePointers.has(e.pointerId)) {
         eng.activePointers.set(e.pointerId, { ...eng.activePointers.get(e.pointerId), x: pos.x, y: pos.y });
       }
 
-      // Gestión de pinch-to-zoom con 2 dedos
       if (eng.activePointers.size === 2 && eng.pinchStartDist > 0) {
         const points = [...eng.activePointers.values()];
         const dx = points[1].x - points[0].x;
@@ -634,7 +607,6 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
           const scaleFactor = currentDist / eng.pinchStartDist;
           const newScale = Math.min(4, Math.max(0.2, eng.pinchStartScale * scaleFactor));
           
-          // Ajustar pan para hacer zoom centrado en el punto medio
           const worldX = (eng.pinchMidX - eng.pinchStartPanX) / eng.pinchStartScale;
           const worldY = (eng.pinchMidY - eng.pinchStartPanY) / eng.pinchStartScale;
           
@@ -710,10 +682,8 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
     };
 
     const handlePointerUp = (e) => {
-      // Eliminar puntero del registro
       eng.activePointers.delete(e.pointerId);
 
-      // Si terminó un gesto de pinch, limpiar
       if (eng.activePointers.size < 2) {
         eng.pinchStartDist = 0;
       }
@@ -722,7 +692,6 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
       if (uiRef.current.mode === 'select') { 
         eng.dragStart = null; 
         eng.transformMode = null; 
-        // Liberar captura si la había
         try { canvas.releasePointerCapture(e.pointerId); } catch (ex) {}
         return; 
       }
@@ -730,12 +699,10 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
       eng.strokes.push(eng.currentStroke);
       eng.currentStroke = null; eng.lastPx = null;
 
-      // Emitir actualización
       triggerUpdate();
     };
 
     const handlePointerCancel = (e) => {
-      // Similar a pointerup pero limpiando estado
       eng.activePointers.delete(e.pointerId);
       if (eng.activePointers.size < 2) {
         eng.pinchStartDist = 0;
@@ -782,7 +749,34 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
     };
   }, []);
 
-  // ---------- EINES EXTERNES I BOTONS ----------
+  // ---------- FUNCIÓN PARA ELIMINAR OBJETO SELECCIONADO ----------
+  const deleteSelected = () => {
+    const eng = engineRef.current;
+    if (mode !== 'select' || !eng.selectedGroupId) return;
+    const gid = eng.selectedGroupId;
+    eng.strokes = eng.strokes.filter(s => s.groupId !== gid);
+    eng.selectedGroupId = null;
+    setSelectedId(null);
+    eng.transformMode = null;
+    triggerUpdate();
+  };
+
+  // ---------- TECLA SUPRIMIR / RETROCESO ----------
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (mode !== 'select') return;
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (e.key === 'Backspace') {
+          e.preventDefault();
+        }
+        deleteSelected();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ---------- Herramientas externas ----------
   const applyMathTool = (val) => {
     setMathMenuOpen(false);
     if (!val) return;
@@ -825,7 +819,7 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
       }
     }
 
-    triggerUpdate(); // acció local → emet
+    triggerUpdate();
   };
 
   const undo = () => {
@@ -841,18 +835,19 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
     }
     if (engineRef.current.selectedGroupId === lastGroupId) {
       engineRef.current.selectedGroupId = null;
+      setSelectedId(null);
     }
-    triggerUpdate(); // acció local → emet
+    triggerUpdate();
   };
 
   const clearAll = () => {
     if(confirm('Esborrar tota la pissarra?')){
       engineRef.current.strokes = [];
-      triggerUpdate(); // acció local → emet
+      setSelectedId(null);
+      triggerUpdate();
     }
   };
 
-  // ---------- INSERIR IMATGE DEL PANELL 3D ----------
   const handleInsertSnapshot = (dataUrl) => {
     const eng = engineRef.current;
     const wrap = wrapRef.current;
@@ -883,13 +878,12 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
       stroke.widthWorld = 200;
       stroke.heightWorld = 200 * aspect;
       stroke.img = img;
-      triggerUpdate(); // acció local → emet
+      triggerUpdate();
     };
 
-    triggerUpdate(); // acció local → emet
+    triggerUpdate();
   };
 
-  // ---------- DESCARREGAR PNG ----------
   const handleDownload = () => {
     const eng = engineRef.current;
     if (eng.strokes.length === 0) {
@@ -973,15 +967,12 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
     download: handleDownload
   }));
 
-  // Manejador para cambiar color: si hay objeto seleccionado, cambia su color
   const handleColorChange = (newColor) => {
     const eng = engineRef.current;
     if (mode === 'select' && eng.selectedGroupId) {
-      // Cambiar color del grupo seleccionado
       eng.changeGroupColor(eng.selectedGroupId, newColor);
       setColor(newColor);
     } else {
-      // Comportamiento normal: cambiar color y activar modo dibujo
       setColor(newColor);
       setMode('draw');
     }
@@ -1086,7 +1077,22 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
           <svg viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20H8l-5-5a2 2 0 0 1 0-2.8L13.4 2.8a2 2 0 0 1 2.8 0l5 5a2 2 0 0 1 0 2.8L14 18"/></svg>
         </button>
         <button className="tool-btn" onClick={undo}>↺</button>
-        <button className="tool-btn" onClick={clearAll}>🗑️</button>
+        <button className="tool-btn" onClick={clearAll}>❌</button>
+        {/* BOTÓN ELIMINAR OBJETO SELECCIONADO - ahora usa selectedId para el estilo */}
+        <button
+          className="tool-btn"
+          onClick={deleteSelected}
+          title="Eliminar objecte seleccionat (Supr)"
+          style={{ opacity: (mode === 'select' && selectedId) ? 1 : 0.4 }}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="16" height="16">
+            <path d="M3 6h18" />
+            <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+            <path d="M10 11v6" />
+            <path d="M14 11v6" />
+            <path d="M5 6l1 14a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-14" />
+          </svg>
+        </button>
         <button className="tool-btn" onClick={handleDownload} title="Descarregar PNG">⬇️</button>
 
         <div className="divider"></div>
@@ -1096,6 +1102,33 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
           title="Biblioteca de sòlids 3D"
         >
           🧊 3D
+        </button>
+
+        {/* NUEVOS BOTONES */}
+        <div className="divider"></div>
+        <button
+          className={`tool-btn ${showRoom ? 'active' : ''}`}
+          onClick={onToggleRoom}
+          title={showRoom ? 'Amagar Portal MYP' : 'Connectar Aula'}
+        >
+          🌐
+        </button>
+        <button className="tool-btn" onClick={onNewBoard} title="Nova pissarra">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="16" y1="13" x2="8" y2="13"></line>
+            <line x1="16" y1="17" x2="8" y2="17"></line>
+            <polyline points="10 9 9 9 8 9"></polyline>
+          </svg>
+        </button>
+        <button className="tool-btn" onClick={onDownload} title="Descarregar PNG">
+          ⬇️
+        </button>
+        <button className="tool-btn" onClick={onToggleFullscreen} title={isFullscreen ? 'Sortir de pantalla completa' : 'Pantalla completa'}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+            <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
+          </svg>
         </button>
       </div>
 
@@ -1112,10 +1145,12 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
 
       {showRoom && (
         <RoomManager 
-          getCanvasState={() => engineRef.current.strokes} 
+          getCanvasState={getCanvasState} 
           setCanvasState={(nousTracos) => {
             engineRef.current.strokes = nousTracos;
-            triggerUpdate();
+            if (engineRef.current.redraw) {
+              engineRef.current.redraw();
+            }
           }} 
         />
       )}
@@ -1123,15 +1158,12 @@ const InfiniteCanvas = forwardRef(({ subject, unit, session, clearTrigger, showR
   );
 });
 
-/* =========================================================================
-   BIBLIOTECA DE SÒLIDS 3D (component Solid3DPanel)
-   ========================================================================= */
+// --- Componente Solid3DPanel (sin cambios) ---
 const SQ2 = Math.sqrt(2);
 const SQ3 = Math.sqrt(3);
 const SQ5 = Math.sqrt(5);
 const PHI_3D = (1 + SQ5) / 2;
 
-// Dades base dels sòlids platònics
 const TETRA_VERTS = [1, 1, 1, -1, -1, 1, -1, 1, -1, 1, -1, -1];
 const TETRA_IDX = [2, 1, 0, 0, 3, 2, 1, 3, 0, 2, 3, 1];
 
@@ -1595,7 +1627,6 @@ function Solid3DPanel({ onClose, onInsertSnapshot }) {
     e.currentTarget.setPointerCapture(e.pointerId);
 
     if (t.activePointers.size === 2) {
-      // Comença un gest de pinça amb dos dits: no interpretem cap dit com a rotació.
       t.dragging = false;
       const pts = [...t.activePointers.values()];
       t.pinchLastDist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y) || 1;
@@ -1612,7 +1643,6 @@ function Solid3DPanel({ onClose, onInsertSnapshot }) {
     }
 
     if (t.activePointers.size >= 2) {
-      // Pinça amb dos dits: apropar/allunyar per fer zoom (equivalent a la roda del ratolí)
       const pts = [...t.activePointers.values()].slice(0, 2);
       const newDist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y) || 1;
       if (t.pinchLastDist) {
